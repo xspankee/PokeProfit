@@ -571,7 +571,8 @@ export default function PokemonTCGBrowser() {
 
         {/* Content */}
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 py-5 sm:py-8">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
             {/* Pokéball icon */}
             <div className="w-12 h-12 sm:w-16 sm:h-16 flex-shrink-0">
               <svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-[0_4px_16px_rgba(204,0,0,0.6)]">
@@ -610,6 +611,21 @@ export default function PokemonTCGBrowser() {
                 </span>
               </div>
             </div>
+            </div>
+            {/* Refresh button */}
+            <button
+              onClick={() => selectedSetId && fetchCards(selectedSetId)}
+              disabled={loadingCards}
+              title="Refresh cards"
+              className="flex-shrink-0 w-9 h-9 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-white transition disabled:opacity-40"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={`w-4 h-4 ${loadingCards ? "animate-spin" : ""}`}>
+                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                <path d="M3 21v-5h5" />
+              </svg>
+            </button>
           </div>
         </div>
 

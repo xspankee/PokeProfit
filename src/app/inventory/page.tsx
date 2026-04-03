@@ -319,6 +319,17 @@ export default function InventoryPage() {
     setInventory((prev) => prev.map((i) => (i.id === id ? { ...i, pricePaid: newPrice } : i)));
   };
 
+  const refreshInventory = useCallback(async () => {
+    if (!user) return;
+    setLoadingInventory(true);
+    const { data, error } = await supabase
+      .from("inventory")
+      .select("*")
+      .order("added_at", { ascending: true });
+    if (!error && data) setInventory(data.map(rowToEntry));
+    setLoadingInventory(false);
+  }, [user]);
+
   const signOut = async () => {
     await supabase.auth.signOut();
     router.push("/login");
@@ -421,6 +432,20 @@ export default function InventoryPage() {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
+            {/* Refresh */}
+            <button
+              onClick={refreshInventory}
+              disabled={loadingInventory}
+              title="Refresh inventory"
+              className="w-9 h-9 flex items-center justify-center rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-400 hover:text-white transition disabled:opacity-40"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={`w-4 h-4 ${loadingInventory ? "animate-spin" : ""}`}>
+                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                <path d="M21 3v5h-5" />
+                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                <path d="M3 21v-5h5" />
+              </svg>
+            </button>
             {/* User avatar + sign out */}
             <div className="flex items-center gap-2">
               {user.user_metadata?.avatar_url && (
