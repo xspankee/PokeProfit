@@ -1,17 +1,21 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-export async function middleware(request: NextRequest) {
-  const isInventory = request.nextUrl.pathname.startsWith("/inventory");
+const PUBLIC_PATHS = ["/login", "/auth/callback"];
 
-  // If env vars aren't configured, always redirect /inventory to /login
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    if (isInventory) {
-      const url = request.nextUrl.clone();
-      url.pathname = "/login";
-      return NextResponse.redirect(url);
-    }
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  // Allow public paths through always
+  if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
     return NextResponse.next({ request });
+  }
+
+  // If env vars aren't configured, redirect everything to /login
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/login";
+    return NextResponse.redirect(url);
   }
 
   let supabaseResponse = NextResponse.next({ request });
@@ -37,13 +41,12 @@ export async function middleware(request: NextRequest) {
     }
   );
 
-  // Refresh session — must not be removed
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Protect /inventory — redirect to /login if not signed in
-  if (!user && isInventory) {
+  // Redirect to /login if not signed in
+  if (!user) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { createClient } from "@/lib/supabase/client";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -368,6 +369,8 @@ function CardItem({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function PokemonTCGBrowser() {
+  const supabase = createClient();
+
   const [sets, setSets] = useState<PokemonSet[]>([]);
   const [selectedSetId, setSelectedSetId] = useState("");
   const [cards, setCards] = useState<PokemonCard[]>([]);
@@ -378,34 +381,40 @@ export default function PokemonTCGBrowser() {
   // Inventory
   const [selectedCard, setSelectedCard] = useState<PokemonCard | null>(null);
   const [inventoryCardIds, setInventoryCardIds] = useState<Set<string>>(new Set());
+  const [userId, setUserId] = useState<string | null>(null);
 
+  // Load user + owned card IDs from Supabase
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("tcg-inventory");
-      if (saved) {
-        const items = JSON.parse(saved) as { cardId: string }[];
-        setInventoryCardIds(new Set(items.map((i) => i.cardId)));
-      }
-    } catch {}
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return;
+      setUserId(user.id);
+      supabase
+        .from("inventory")
+        .select("card_id")
+        .then(({ data }) => {
+          if (data) setInventoryCardIds(new Set(data.map((r) => r.card_id as string)));
+        });
+    });
   }, []);
 
-  const addToInventory = (card: PokemonCard, pricePaid: number) => {
-    const entry = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      cardId: card.id,
-      cardName: card.name,
-      setName: selectedSet?.name ?? "",
-      rarity: card.rarity,
-      imageSmall: card.images.small,
-      pricePaid,
-      addedAt: new Date().toISOString(),
-    };
-    try {
-      const saved = localStorage.getItem("tcg-inventory");
-      const existing = saved ? JSON.parse(saved) : [];
-      localStorage.setItem("tcg-inventory", JSON.stringify([...existing, entry]));
-      setInventoryCardIds((prev) => new Set([...prev, card.id]));
-    } catch {}
+  const addToInventory = async (card: PokemonCard, pricePaid: number) => {
+    if (!userId) {
+      setSelectedCard(null);
+      return;
+    }
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await supabase.from("inventory").insert({
+      id,
+      user_id: userId,
+      card_id: card.id,
+      card_name: card.name,
+      set_name: selectedSet?.name ?? "",
+      rarity: card.rarity ?? null,
+      image_small: card.images.small,
+      price_paid: pricePaid,
+      added_at: new Date().toISOString(),
+    });
+    setInventoryCardIds((prev) => new Set([...prev, card.id]));
     setSelectedCard(null);
   };
 

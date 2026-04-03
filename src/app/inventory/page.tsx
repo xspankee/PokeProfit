@@ -1,6 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, Fragment } from "react";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
+import type { User } from "@supabase/supabase-js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,22 +45,6 @@ function getCardPrice(card: {
   if (cm?.averageSellPrice && cm.averageSellPrice > 0) return cm.averageSellPrice;
   if (cm?.trendPrice && cm.trendPrice > 0) return cm.trendPrice;
   return null;
-}
-
-const STORAGE_KEY = "tcg-inventory";
-
-function loadInventory(): InventoryEntry[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveInventory(items: InventoryEntry[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
 }
 
 // ─── Add Card Modal ───────────────────────────────────────────────────────────
@@ -110,7 +97,6 @@ function AddCardModal({
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
       <div className="bg-slate-900 rounded-2xl border border-slate-700 w-full max-w-lg shadow-2xl">
-        {/* Modal header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
           <h2 className="font-bold text-white">Add Card to Inventory</h2>
           <button
@@ -122,7 +108,6 @@ function AddCardModal({
         </div>
 
         <div className="p-5 space-y-4">
-          {/* Search bar */}
           <div className="flex gap-2">
             <input
               type="text"
@@ -141,7 +126,6 @@ function AddCardModal({
             </button>
           </div>
 
-          {/* Results list */}
           {results.length > 0 && !selected && (
             <div className="space-y-1 max-h-64 overflow-y-auto pr-1">
               {results.map((card) => (
@@ -151,11 +135,7 @@ function AddCardModal({
                   className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-slate-800 transition text-left"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={card.images.small}
-                    alt={card.name}
-                    className="w-8 h-11 object-cover rounded"
-                  />
+                  <img src={card.images.small} alt={card.name} className="w-8 h-11 object-cover rounded" />
                   <div>
                     <div className="text-sm font-semibold text-white">{card.name}</div>
                     <div className="text-xs text-slate-500">
@@ -171,25 +151,18 @@ function AddCardModal({
             <p className="text-center text-slate-500 text-sm py-2">No results found.</p>
           )}
 
-          {/* Selected card + price input */}
           {selected && (
             <div className="space-y-3">
               <div className="flex items-center gap-3 p-3 bg-slate-800 rounded-xl">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={selected.images.small}
-                  alt={selected.name}
-                  className="w-10 h-14 object-cover rounded"
-                />
+                <img src={selected.images.small} alt={selected.name} className="w-10 h-14 object-cover rounded" />
                 <div className="flex-1 min-w-0">
                   <div className="font-semibold text-white truncate">{selected.name}</div>
                   <div className="text-xs text-slate-400">
                     {selected.set.name} · {selected.rarity ?? "Unknown"}
                   </div>
                   {marketPrice !== null && (
-                    <div className="text-xs text-yellow-400 mt-0.5">
-                      Market: ${marketPrice.toFixed(2)}
-                    </div>
+                    <div className="text-xs text-yellow-400 mt-0.5">Market: ${marketPrice.toFixed(2)}</div>
                   )}
                 </div>
                 <button
@@ -234,19 +207,58 @@ function AddCardModal({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function InventoryPage() {
+  const router = useRouter();
+  const supabase = createClient();
+
+  const [user, setUser] = useState<User | null>(null);
   const [inventory, setInventory] = useState<InventoryEntry[]>([]);
   const [marketPrices, setMarketPrices] = useState<Record<string, number | null>>({});
   const [loadingPrices, setLoadingPrices] = useState(false);
+  const [loadingInventory, setLoadingInventory] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editPrice, setEditPrice] = useState("");
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
-  // Load from localStorage on mount
+  // Auth check + load user
   useEffect(() => {
-    setInventory(loadInventory());
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) {
+        router.push("/login");
+      } else {
+        setUser(user);
+      }
+    });
   }, []);
 
-  // Fetch live market prices for all unique card IDs in inventory
+  // Row mapper: DB row → InventoryEntry
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rowToEntry = (row: any): InventoryEntry => ({
+    id: row.id,
+    cardId: row.card_id,
+    cardName: row.card_name,
+    setName: row.set_name,
+    rarity: row.rarity ?? undefined,
+    imageSmall: row.image_small,
+    pricePaid: parseFloat(row.price_paid),
+    addedAt: row.added_at,
+  });
+
+  // Load inventory from Supabase
+  useEffect(() => {
+    if (!user) return;
+    setLoadingInventory(true);
+    supabase
+      .from("inventory")
+      .select("*")
+      .order("added_at", { ascending: true })
+      .then(({ data, error }) => {
+        if (!error && data) setInventory(data.map(rowToEntry));
+        setLoadingInventory(false);
+      });
+  }, [user]);
+
+  // Fetch live market prices
   const fetchMarketPrices = useCallback(async (items: InventoryEntry[]) => {
     const uniqueIds = [...new Set(items.map((i) => i.cardId))];
     if (uniqueIds.length === 0) return;
@@ -272,30 +284,54 @@ export default function InventoryPage() {
     else setMarketPrices({});
   }, [inventory, fetchMarketPrices]);
 
-  const addCard = (entry: Omit<InventoryEntry, "id" | "addedAt">) => {
-    const newEntry: InventoryEntry = {
-      ...entry,
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      addedAt: new Date().toISOString(),
-    };
-    const updated = [...inventory, newEntry];
-    setInventory(updated);
-    saveInventory(updated);
+  const addCard = async (entry: Omit<InventoryEntry, "id" | "addedAt">) => {
+    if (!user) return;
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const addedAt = new Date().toISOString();
+
+    const { error } = await supabase.from("inventory").insert({
+      id,
+      user_id: user.id,
+      card_id: entry.cardId,
+      card_name: entry.cardName,
+      set_name: entry.setName,
+      rarity: entry.rarity ?? null,
+      image_small: entry.imageSmall,
+      price_paid: entry.pricePaid,
+      added_at: addedAt,
+    });
+
+    if (!error) {
+      setInventory((prev) => [
+        ...prev,
+        { ...entry, id, addedAt },
+      ]);
+    }
   };
 
-  const removeCard = (id: string) => {
-    const updated = inventory.filter((i) => i.id !== id);
-    setInventory(updated);
-    saveInventory(updated);
+  const removeCard = async (id: string) => {
+    await supabase.from("inventory").delete().eq("id", id);
+    setInventory((prev) => prev.filter((i) => i.id !== id));
   };
 
-  const updatePricePaid = (id: string, newPrice: number) => {
-    const updated = inventory.map((i) => (i.id === id ? { ...i, pricePaid: newPrice } : i));
-    setInventory(updated);
-    saveInventory(updated);
+  const updatePricePaid = async (id: string, newPrice: number) => {
+    await supabase.from("inventory").update({ price_paid: newPrice }).eq("id", id);
+    setInventory((prev) => prev.map((i) => (i.id === id ? { ...i, pricePaid: newPrice } : i)));
   };
 
-  // Summary stats
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    router.push("/login");
+  };
+
+  const toggleGroup = (cardId: string) =>
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(cardId)) next.delete(cardId);
+      else next.add(cardId);
+      return next;
+    });
+
   const stats = useMemo(() => {
     let totalPaid = 0;
     let totalMarket = 0;
@@ -308,16 +344,6 @@ export default function InventoryPage() {
   }, [inventory, marketPrices]);
 
   const hasPrices = Object.keys(marketPrices).length > 0;
-
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-
-  const toggleGroup = (cardId: string) =>
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(cardId)) next.delete(cardId);
-      else next.add(cardId);
-      return next;
-    });
 
   const groupedInventory = useMemo(() => {
     const map = new Map<
@@ -347,14 +373,19 @@ export default function InventoryPage() {
     return Array.from(map.values());
   }, [inventory]);
 
+  if (!user || loadingInventory) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-yellow-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-white font-sans">
       {/* Header */}
       <header className="relative overflow-hidden bg-gradient-to-br from-zinc-900 via-emerald-950 to-zinc-900 shadow-2xl">
-        {/* Yellow top accent */}
         <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-transparent via-yellow-400 to-transparent" />
-
-        {/* Dot grid */}
         <div
           className="absolute inset-0 opacity-[0.03]"
           style={{
@@ -362,22 +393,12 @@ export default function InventoryPage() {
             backgroundSize: "22px 22px",
           }}
         />
-
-        {/* Decorative profit trend lines */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none select-none opacity-[0.06]">
           <svg className="w-full h-full" viewBox="0 0 800 120" preserveAspectRatio="none">
-            <polyline
-              points="0,100 120,80 240,90 360,50 480,65 600,30 720,45 800,20"
-              fill="none" stroke="#34d399" strokeWidth="2.5"
-            />
-            <polyline
-              points="0,115 120,100 240,108 360,72 480,82 600,52 720,65 800,42"
-              fill="none" stroke="#34d399" strokeWidth="1.5"
-            />
+            <polyline points="0,100 120,80 240,90 360,50 480,65 600,30 720,45 800,20" fill="none" stroke="#34d399" strokeWidth="2.5" />
+            <polyline points="0,115 120,100 240,108 360,72 480,82 600,52 720,65 800,42" fill="none" stroke="#34d399" strokeWidth="1.5" />
           </svg>
         </div>
-
-        {/* Large decorative circle — right */}
         <div className="absolute -right-16 top-1/2 -translate-y-1/2 w-64 h-64 pointer-events-none select-none opacity-[0.05]">
           <svg viewBox="0 0 200 200" className="w-full h-full">
             <circle cx="100" cy="100" r="95" fill="none" stroke="#34d399" strokeWidth="4" />
@@ -386,7 +407,6 @@ export default function InventoryPage() {
           </svg>
         </div>
 
-        {/* Content */}
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 py-5 sm:py-8 flex items-end justify-between gap-4">
           <div>
             <div className="text-[10px] sm:text-xs font-bold text-emerald-400/70 uppercase tracking-[0.4em] mb-1">
@@ -400,12 +420,31 @@ export default function InventoryPage() {
               {inventory.length} card{inventory.length !== 1 ? "s" : ""} tracked
             </p>
           </div>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="flex-shrink-0 flex items-center gap-2 bg-yellow-500 hover:bg-yellow-400 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm transition shadow-lg"
-          >
-            + Add Card
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {/* User avatar + sign out */}
+            <div className="flex items-center gap-2">
+              {user.user_metadata?.avatar_url && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={user.user_metadata.avatar_url}
+                  alt="avatar"
+                  className="w-7 h-7 rounded-full border border-slate-700 hidden sm:block"
+                />
+              )}
+              <button
+                onClick={signOut}
+                className="text-xs text-slate-400 hover:text-white transition px-3 py-2 rounded-lg hover:bg-slate-800"
+              >
+                Sign out
+              </button>
+            </div>
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="flex items-center gap-2 bg-yellow-500 hover:bg-yellow-400 text-slate-900 font-bold px-4 py-2.5 rounded-xl text-sm transition shadow-lg"
+            >
+              + Add Card
+            </button>
+          </div>
         </div>
 
         <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-emerald-600/50 to-transparent" />
@@ -416,18 +455,11 @@ export default function InventoryPage() {
         {inventory.length > 0 && (
           <div className="grid grid-cols-3 gap-3 sm:gap-4">
             <div className="bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-800">
-              <div className="text-[10px] sm:text-xs text-slate-500 uppercase tracking-widest mb-1">
-                Total Paid
-              </div>
-              <div className="text-xl sm:text-2xl font-black text-white">
-                ${stats.totalPaid.toFixed(2)}
-              </div>
+              <div className="text-[10px] sm:text-xs text-slate-500 uppercase tracking-widest mb-1">Total Paid</div>
+              <div className="text-xl sm:text-2xl font-black text-white">${stats.totalPaid.toFixed(2)}</div>
             </div>
-
             <div className="bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-800">
-              <div className="text-[10px] sm:text-xs text-slate-500 uppercase tracking-widest mb-1">
-                Market Value
-              </div>
+              <div className="text-[10px] sm:text-xs text-slate-500 uppercase tracking-widest mb-1">Market Value</div>
               <div className="text-xl sm:text-2xl font-black text-yellow-400">
                 {loadingPrices ? (
                   <span className="text-slate-500 text-base animate-pulse">Loading…</span>
@@ -438,16 +470,9 @@ export default function InventoryPage() {
                 )}
               </div>
             </div>
-
             <div className="bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-800">
-              <div className="text-[10px] sm:text-xs text-slate-500 uppercase tracking-widest mb-1">
-                Profit / Loss
-              </div>
-              <div
-                className={`text-xl sm:text-2xl font-black ${
-                  stats.pl >= 0 ? "text-emerald-400" : "text-red-400"
-                }`}
-              >
+              <div className="text-[10px] sm:text-xs text-slate-500 uppercase tracking-widest mb-1">Profit / Loss</div>
+              <div className={`text-xl sm:text-2xl font-black ${stats.pl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
                 {loadingPrices ? (
                   <span className="text-slate-500 text-base animate-pulse">Loading…</span>
                 ) : hasPrices ? (
@@ -465,9 +490,7 @@ export default function InventoryPage() {
           <div className="flex flex-col items-center justify-center py-32 text-slate-500">
             <div className="text-6xl mb-4">📦</div>
             <p className="text-lg font-medium text-slate-400 mb-2">No cards yet</p>
-            <p className="text-sm text-slate-500 mb-6">
-              Add cards from your collection to track their value
-            </p>
+            <p className="text-sm text-slate-500 mb-6">Add cards from your collection to track their value</p>
             <button
               onClick={() => setShowAddModal(true)}
               className="bg-yellow-500 hover:bg-yellow-400 text-slate-900 font-bold px-5 py-2.5 rounded-xl text-sm transition"
@@ -476,30 +499,17 @@ export default function InventoryPage() {
             </button>
           </div>
         ) : (
-          /* Inventory table */
           <div className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-800 text-left">
-                    <th className="px-4 py-3 text-xs text-slate-500 uppercase tracking-wider">
-                      Card
-                    </th>
-                    <th className="px-4 py-3 text-xs text-slate-500 uppercase tracking-wider hidden sm:table-cell">
-                      Set
-                    </th>
-                    <th className="px-4 py-3 text-xs text-slate-500 uppercase tracking-wider hidden md:table-cell">
-                      Rarity
-                    </th>
-                    <th className="px-4 py-3 text-xs text-slate-500 uppercase tracking-wider text-right">
-                      Paid
-                    </th>
-                    <th className="px-4 py-3 text-xs text-slate-500 uppercase tracking-wider text-right">
-                      Market
-                    </th>
-                    <th className="px-4 py-3 text-xs text-slate-500 uppercase tracking-wider text-right">
-                      P / L
-                    </th>
+                    <th className="px-4 py-3 text-xs text-slate-500 uppercase tracking-wider">Card</th>
+                    <th className="px-4 py-3 text-xs text-slate-500 uppercase tracking-wider hidden sm:table-cell">Set</th>
+                    <th className="px-4 py-3 text-xs text-slate-500 uppercase tracking-wider hidden md:table-cell">Rarity</th>
+                    <th className="px-4 py-3 text-xs text-slate-500 uppercase tracking-wider text-right">Paid</th>
+                    <th className="px-4 py-3 text-xs text-slate-500 uppercase tracking-wider text-right">Market</th>
+                    <th className="px-4 py-3 text-xs text-slate-500 uppercase tracking-wider text-right">P / L</th>
                     <th className="px-4 py-3 w-10" />
                   </tr>
                 </thead>
@@ -516,9 +526,7 @@ export default function InventoryPage() {
 
                     return (
                       <Fragment key={group.cardId}>
-                        {/* ── Group / summary row ── */}
                         <tr className="border-b border-slate-800 hover:bg-slate-800/40 transition">
-                          {/* Card */}
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-3">
                               {qty > 1 ? (
@@ -553,13 +561,7 @@ export default function InventoryPage() {
                               </div>
                             </div>
                           </td>
-
-                          {/* Set */}
-                          <td className="px-4 py-3 text-slate-400 text-sm hidden sm:table-cell">
-                            {group.setName}
-                          </td>
-
-                          {/* Rarity */}
+                          <td className="px-4 py-3 text-slate-400 text-sm hidden sm:table-cell">{group.setName}</td>
                           <td className="px-4 py-3 hidden md:table-cell">
                             {group.rarity && (
                               <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-pink-900 text-pink-300">
@@ -567,8 +569,6 @@ export default function InventoryPage() {
                               </span>
                             )}
                           </td>
-
-                          {/* Paid */}
                           <td className="px-4 py-3 text-right">
                             {qty === 1 ? (
                               isEditingSolo ? (
@@ -608,8 +608,6 @@ export default function InventoryPage() {
                               </div>
                             )}
                           </td>
-
-                          {/* Market */}
                           <td className="px-4 py-3 text-right font-semibold">
                             {loadingPrices ? (
                               <span className="text-slate-600 text-xs animate-pulse">…</span>
@@ -622,8 +620,6 @@ export default function InventoryPage() {
                               <span className="text-slate-600">—</span>
                             )}
                           </td>
-
-                          {/* P/L */}
                           <td className="px-4 py-3 text-right font-bold">
                             {loadingPrices ? (
                               <span className="text-slate-600 text-xs animate-pulse">…</span>
@@ -635,8 +631,6 @@ export default function InventoryPage() {
                               <span className="text-slate-600">—</span>
                             )}
                           </td>
-
-                          {/* Action */}
                           <td className="px-4 py-3 text-center">
                             {qty === 1 && (
                               <button
@@ -650,15 +644,11 @@ export default function InventoryPage() {
                           </td>
                         </tr>
 
-                        {/* ── Individual copy rows (expanded) ── */}
                         {qty > 1 && isExpanded && group.copies.map((copy, idx) => {
                           const copyPL = market != null ? market - copy.pricePaid : null;
                           const isEditing = editingId === copy.id;
                           return (
-                            <tr
-                              key={copy.id}
-                              className="border-b border-slate-800/50 bg-slate-950/50 hover:bg-slate-950/70 transition"
-                            >
+                            <tr key={copy.id} className="border-b border-slate-800/50 bg-slate-950/50 hover:bg-slate-950/70 transition">
                               <td className="px-4 py-2 pl-10">
                                 <div className="flex items-center gap-2">
                                   <div className="w-0.5 h-5 bg-slate-700 rounded-full flex-shrink-0" />
@@ -667,8 +657,6 @@ export default function InventoryPage() {
                               </td>
                               <td className="hidden sm:table-cell" />
                               <td className="hidden md:table-cell" />
-
-                              {/* Paid (editable) */}
                               <td className="px-4 py-2 text-right">
                                 {isEditing ? (
                                   <form
@@ -701,8 +689,6 @@ export default function InventoryPage() {
                                   </button>
                                 )}
                               </td>
-
-                              {/* Market */}
                               <td className="px-4 py-2 text-right">
                                 {loadingPrices ? (
                                   <span className="text-slate-600 text-xs animate-pulse">…</span>
@@ -712,8 +698,6 @@ export default function InventoryPage() {
                                   <span className="text-slate-600">—</span>
                                 )}
                               </td>
-
-                              {/* P/L */}
                               <td className="px-4 py-2 text-right font-semibold text-sm">
                                 {loadingPrices ? (
                                   <span className="text-slate-600 text-xs animate-pulse">…</span>
@@ -725,8 +709,6 @@ export default function InventoryPage() {
                                   <span className="text-slate-600">—</span>
                                 )}
                               </td>
-
-                              {/* Remove */}
                               <td className="px-4 py-2 text-center">
                                 <button
                                   onClick={() => removeCard(copy.id)}
@@ -749,7 +731,6 @@ export default function InventoryPage() {
         )}
       </div>
 
-      {/* Add Card Modal */}
       {showAddModal && (
         <AddCardModal
           onAdd={(entry) => {
